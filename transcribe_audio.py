@@ -23,7 +23,7 @@ from faster_whisper import WhisperModel
 # Tunable constants
 # ---------------------------------------------------------------------------
 
-WHISPER_MODEL = "medium"       # Options: tiny, base, small, medium, large, large-v2, large-v3
+WHISPER_MODEL = "base"       # Options: tiny, base, small, medium, large, large-v2, large-v3
 WHISPER_DEVICE = "cpu"         # "cpu" or "cuda" (if GPU available)
 WHISPER_COMPUTE = "int8"       # "int8" (fast/low RAM) or "float16" (GPU), "float32"
 DEFAULT_VIDEO_PATH = "recording.mp4"
@@ -45,7 +45,26 @@ def extract_audio(video_path, audio_path):
         raise RuntimeError(f"ffmpeg failed with exit code {ret}")
 
 
-def transcribe(video_path):
+def detect_language(video_path):
+    """Detect speech language using Whisper's first-pass analysis.
+
+    Returns (language_code, loaded_model) so the model can be reused
+    for full transcription without reloading.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        audio_path = os.path.join(tmpdir, "audio.wav")
+        extract_audio(video_path, audio_path)
+
+        print("Loading Whisper model...")
+        model = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type=WHISPER_COMPUTE)
+
+        _, info = model.transcribe(audio_path, beam_size=1)
+        print(f"Detected language: {info.language} ({info.language_probability:.0%})")
+
+    return info.language, model
+
+
+def transcribe(video_path, model=None):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     print(f"Video: {video_path}")
@@ -57,8 +76,9 @@ def transcribe(video_path):
         print("Extracting audio with ffmpeg...")
         extract_audio(video_path, audio_path)
 
-        print("Loading Whisper model...")
-        model = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type=WHISPER_COMPUTE)
+        if model is None:
+            print("Loading Whisper model...")
+            model = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type=WHISPER_COMPUTE)
 
         print("Transcribing...")
         raw_segments, _info = model.transcribe(audio_path, beam_size=5)

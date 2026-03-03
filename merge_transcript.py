@@ -8,8 +8,8 @@ on screen when those words were spoken.
 If sections.json is present (produced by extract_slides.py), it is used
 to identify slide, face/webcam, and black-screen periods. Transcript
 segments that fall during black screens are silently dropped. Segments
-during face/webcam sections are labelled with a speaker ID if
-speaker_segments.json is available, otherwise [webcam].
+during face/webcam sections are labelled with a speaker ID from
+extract_slides' visual matching, otherwise [webcam].
 
 Falls back to slide_timestamps.json only if sections.json is absent
 (backward compatibility with older runs).
@@ -18,7 +18,6 @@ Input:
   - output/slide_timestamps.json
   - output/transcript_segments.json
   - output/sections.json           (optional but recommended)
-  - output/speaker_segments.json   (optional)
 
 Output:
   - output/synced_transcript.md
@@ -32,7 +31,6 @@ OUTPUT_DIR = "output"
 TIMESTAMPS_FILE = os.path.join(OUTPUT_DIR, "slide_timestamps.json")
 TRANSCRIPT_FILE = os.path.join(OUTPUT_DIR, "transcript_segments.json")
 SECTIONS_FILE   = os.path.join(OUTPUT_DIR, "sections.json")
-SPEAKER_FILE    = os.path.join(OUTPUT_DIR, "speaker_segments.json")
 OUTPUT_FILE     = os.path.join(OUTPUT_DIR, "synced_transcript.md")
 
 # ---------------------------------------------------------------------------
@@ -64,15 +62,7 @@ def find_next_slide_after(time, sections):
     return None
 
 
-def find_speaker_at(time, speaker_segs):
-    """Return the speaker label at `time`, or None."""
-    for seg in speaker_segs:
-        if seg["start"] <= time <= seg["end"]:
-            return seg["speaker"]
-    return None
-
-
-def header_from_sections(seg_start, seg_end, sections, speaker_segs):
+def header_from_sections(seg_start, seg_end, sections):
     """
     Return the header string for a transcript segment, or None to skip it.
     """
@@ -84,11 +74,10 @@ def header_from_sections(seg_start, seg_end, sections, speaker_segs):
         return None  # Drop segments that fall on blank screens
 
     if sec["type"] == "face":
-        img = sec.get("file") or "webcam"
-        speaker = find_speaker_at(seg_start, speaker_segs)
+        speaker = sec.get("speaker")
         if speaker:
-            return f"[{img} | {speaker}]"
-        return f"[{img}]"
+            return f"[{speaker}]"
+        return "[webcam]"
 
     # sec["type"] == "slide"
     # Check whether a slide-to-slide transition occurs mid-segment
@@ -130,21 +119,16 @@ def merge(
     transcript_path=TRANSCRIPT_FILE,
     output_path=OUTPUT_FILE,
     sections_path=SECTIONS_FILE,
-    speaker_path=SPEAKER_FILE,
 ):
     slides = load_json(timestamps_path)
     segments = load_json(transcript_path)
 
     sections = load_json(sections_path) if os.path.exists(sections_path) else None
-    speaker_segs = load_json(speaker_path) if os.path.exists(speaker_path) else []
 
     if sections:
         print("Using sections.json for slide/face/black classification.")
     else:
         print("sections.json not found — falling back to slide-only mode.")
-
-    if speaker_segs:
-        print(f"Speaker data loaded: {len(speaker_segs)} segments.")
 
     lines = []
     prev_header = None
@@ -155,7 +139,7 @@ def merge(
         text      = seg["text"]
 
         if sections:
-            header = header_from_sections(seg_start, seg_end, sections, speaker_segs)
+            header = header_from_sections(seg_start, seg_end, sections)
         else:
             slide_at_start = find_slide_at(seg_start, slides)
             if slide_at_start is None:

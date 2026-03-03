@@ -1,18 +1,11 @@
 """
 Script 4: Run Full Pipeline
 
-Slide extraction, transcription, and speaker diarization all start at the
-same time and run in parallel. The merge step runs once all three finish.
-
-Speaker diarization is optional — it runs automatically if the HF_TOKEN
-environment variable is set, otherwise webcam/Q&A sections are labelled
-[webcam].
+Slide extraction and transcription run in parallel.
+The merge step runs once both finish.
 
 Usage:
     python run_all.py my_recording.mp4
-
-With speaker diarization:
-    HF_TOKEN=hf_... python run_all.py my_recording.mp4
 """
 
 import os
@@ -21,14 +14,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import extract_slides
 import transcribe_audio
-import diarize_speakers
 import merge_transcript
 
 OUTPUT_DIR      = "output"
 TIMESTAMPS_FILE = os.path.join(OUTPUT_DIR, "slide_timestamps.json")
 TRANSCRIPT_FILE = os.path.join(OUTPUT_DIR, "transcript_segments.json")
 SECTIONS_FILE   = os.path.join(OUTPUT_DIR, "sections.json")
-SPEAKER_FILE    = os.path.join(OUTPUT_DIR, "speaker_segments.json")
 OUTPUT_FILE     = os.path.join(OUTPUT_DIR, "synced_transcript.md")
 
 DIVIDER = "-" * 60
@@ -39,20 +30,20 @@ def run_pipeline(video_path):
         print(f"Error: video file not found: {video_path}")
         sys.exit(1)
 
-    hf_token = os.environ.get("HF_TOKEN", "")
+    # Step 1: Detect language (needed for OCR language selection)
+    print(DIVIDER)
+    print("  Detecting language...")
+    print(DIVIDER)
+    lang, whisper_model = transcribe_audio.detect_language(video_path)
+    ocr_lang = extract_slides.whisper_to_tesseract_lang(lang)
 
-    # Build the set of tasks that run in parallel
+    # Step 2: Run extraction and transcription in parallel
     tasks = {
-        "slide extraction": lambda: extract_slides.extract_slides(video_path),
-        "transcription":    lambda: transcribe_audio.transcribe(video_path),
+        "slide extraction": lambda: extract_slides.extract_slides(video_path, ocr_lang=ocr_lang),
+        "transcription":    lambda: transcribe_audio.transcribe(video_path, model=whisper_model),
     }
-    if hf_token:
-        tasks["diarization"] = lambda: diarize_speakers.diarize(video_path)
-    else:
-        print("HF_TOKEN not set — diarization skipped (webcam sections labelled [webcam]).")
-        print(f"To enable: HF_TOKEN=hf_... python run_all.py <video>\n")
 
-    print(f"{DIVIDER}")
+    print(f"\n{DIVIDER}")
     print(f"  Starting {len(tasks)} task(s) in parallel: {', '.join(tasks)}")
     print(DIVIDER)
 
@@ -83,7 +74,6 @@ def run_pipeline(video_path):
         transcript_path=TRANSCRIPT_FILE,
         output_path=OUTPUT_FILE,
         sections_path=SECTIONS_FILE,
-        speaker_path=SPEAKER_FILE,
     )
 
     print(f"\n{DIVIDER}")
