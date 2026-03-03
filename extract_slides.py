@@ -8,6 +8,7 @@ screens from real slide content.
 
 Output:
   - output/slides/slide_001.png, slide_002.png, ...
+  - output/slides/speaker_01.png, speaker_02.png, ...  (one frame per face section)
   - output/slide_timestamps.json   — slide entries only (backward-compat)
   - output/sections.json           — all labeled time periods (slide/face/black)
 """
@@ -117,6 +118,13 @@ def save_slide(frame, index, slide_start, slide_end):
     return filename
 
 
+def save_face(frame, index, face_start, face_end):
+    filename = f"speaker_{index:02d}.png"
+    cv2.imwrite(os.path.join(SLIDES_DIR, filename), frame)
+    print(f"  Saved {filename}  [{face_start:.1f}s → {face_end:.1f}s]")
+    return filename
+
+
 def extract_slides(video_path):
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -160,6 +168,10 @@ def extract_slides(video_path):
     slide_prev = None       # Previous slide frame used for SSIM comparison
     slide_index = 1
 
+    # Face tracking (only active when current_type == 'face')
+    face_candidate = None   # Most recent frame seen during the face section
+    face_index = 1
+
     frame_idx = 0
     while True:
         ret, frame = cap.read()
@@ -179,6 +191,8 @@ def extract_slides(video_path):
                 if ftype == "slide":
                     slide_candidate = frame
                     slide_start = t
+                elif ftype == "face":
+                    face_candidate = frame
 
             elif ftype == current_type:
                 # Same type — reset debounce
@@ -206,6 +220,9 @@ def extract_slides(video_path):
                             slide_candidate = frame
                         slide_prev = frame
 
+                elif ftype == "face":
+                    face_candidate = frame  # keep most recent face frame
+
             else:
                 # Different type — debounce
                 if ftype == pending_type:
@@ -231,9 +248,21 @@ def extract_slides(video_path):
                         slide_candidate = None
                         slide_prev = None
 
-                    elif current_type in ("face", "black"):
+                    elif current_type == "face" and face_candidate is not None:
+                        filename = save_face(face_candidate, face_index,
+                                             section_start, pending_start)
                         all_sections.append({
-                            "type": current_type,
+                            "type": "face",
+                            "file": filename,
+                            "start": round(section_start, 3),
+                            "end": round(pending_start, 3),
+                        })
+                        face_index += 1
+                        face_candidate = None
+
+                    elif current_type == "black":
+                        all_sections.append({
+                            "type": "black",
                             "file": None,
                             "start": round(section_start, 3),
                             "end": round(pending_start, 3),
@@ -248,6 +277,8 @@ def extract_slides(video_path):
                         slide_candidate = frame
                         slide_start = section_start
                         slide_prev = None
+                    elif current_type == "face":
+                        face_candidate = frame
 
         frame_idx += 1
 
@@ -260,9 +291,17 @@ def extract_slides(video_path):
         rec = {"file": filename, "start": round(slide_start, 3), "end": round(t, 3)}
         slide_records.append(rec)
         all_sections.append({"type": "slide", **rec})
-    elif current_type in ("face", "black"):
+    elif current_type == "face" and face_candidate is not None:
+        filename = save_face(face_candidate, face_index, section_start, t)
         all_sections.append({
-            "type": current_type,
+            "type": "face",
+            "file": filename,
+            "start": round(section_start, 3),
+            "end": round(t, 3),
+        })
+    elif current_type == "black":
+        all_sections.append({
+            "type": "black",
             "file": None,
             "start": round(section_start, 3),
             "end": round(t, 3),

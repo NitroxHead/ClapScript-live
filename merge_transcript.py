@@ -84,8 +84,11 @@ def header_from_sections(seg_start, seg_end, sections, speaker_segs):
         return None  # Drop segments that fall on blank screens
 
     if sec["type"] == "face":
+        img = sec.get("file") or "webcam"
         speaker = find_speaker_at(seg_start, speaker_segs)
-        return f"[{speaker}]" if speaker else "[webcam]"
+        if speaker:
+            return f"[{img} | {speaker}]"
+        return f"[{img}]"
 
     # sec["type"] == "slide"
     # Check whether a slide-to-slide transition occurs mid-segment
