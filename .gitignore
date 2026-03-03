@@ -4,3 +4,5 @@ models/
 .claude/
 CLAUDE.md
 *.wav
+experiment/whisper_size_comparison/results/
+experiment/whisper_size_comparison/report.html
