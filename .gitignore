@@ -3,3 +3,4 @@ output*/
 models/
 .claude/
 CLAUDE.md
+*.wav
