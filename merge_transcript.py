@@ -1,9 +1,24 @@
 """
 Script 3: Merge Transcript with Slide Timestamps
 
-Combines slide_timestamps.json and transcript_segments.json into a
-human-readable synced_transcript.md where each block of text is
-labelled with the slide(s) visible when those words were spoken.
+Combines slide/section data and transcript segments into a human-readable
+synced_transcript.md where each block of text is labelled with what was
+on screen when those words were spoken.
+
+If sections.json is present (produced by extract_slides.py), it is used
+to identify slide, face/webcam, and black-screen periods. Transcript
+segments that fall during black screens are silently dropped. Segments
+during face/webcam sections are labelled with a speaker ID if
+speaker_segments.json is available, otherwise [webcam].
+
+Falls back to slide_timestamps.json only if sections.json is absent
+(backward compatibility with older runs).
+
+Input:
+  - output/slide_timestamps.json
+  - output/transcript_segments.json
+  - output/sections.json           (optional but recommended)
+  - output/speaker_segments.json   (optional)
 
 Output:
   - output/synced_transcript.md
@@ -13,13 +28,11 @@ import json
 import os
 import sys
 
-# ---------------------------------------------------------------------------
-# Paths (override via command-line args or environment)
-# ---------------------------------------------------------------------------
-
 OUTPUT_DIR = "output"
 TIMESTAMPS_FILE = os.path.join(OUTPUT_DIR, "slide_timestamps.json")
 TRANSCRIPT_FILE = os.path.join(OUTPUT_DIR, "transcript_segments.json")
+SECTIONS_FILE   = os.path.join(OUTPUT_DIR, "sections.json")
+SPEAKER_FILE    = os.path.join(OUTPUT_DIR, "speaker_segments.json")
 OUTPUT_FILE     = os.path.join(OUTPUT_DIR, "synced_transcript.md")
 
 # ---------------------------------------------------------------------------
@@ -30,8 +43,61 @@ def load_json(path):
         return json.load(f)
 
 
+# --- Helpers for sections-aware mode ----------------------------------------
+
+def find_section_at(time, sections):
+    """Return the section record active at `time`."""
+    active = None
+    for sec in sections:
+        if sec["start"] <= time:
+            active = sec
+        else:
+            break
+    return active
+
+
+def find_next_slide_after(time, sections):
+    """Return the next slide section that starts strictly after `time`."""
+    for sec in sections:
+        if sec["type"] == "slide" and sec["start"] > time:
+            return sec
+    return None
+
+
+def find_speaker_at(time, speaker_segs):
+    """Return the speaker label at `time`, or None."""
+    for seg in speaker_segs:
+        if seg["start"] <= time <= seg["end"]:
+            return seg["speaker"]
+    return None
+
+
+def header_from_sections(seg_start, seg_end, sections, speaker_segs):
+    """
+    Return the header string for a transcript segment, or None to skip it.
+    """
+    sec = find_section_at(seg_start, sections)
+    if sec is None:
+        return "[unknown]"
+
+    if sec["type"] == "black":
+        return None  # Drop segments that fall on blank screens
+
+    if sec["type"] == "face":
+        speaker = find_speaker_at(seg_start, speaker_segs)
+        return f"[{speaker}]" if speaker else "[webcam]"
+
+    # sec["type"] == "slide"
+    # Check whether a slide-to-slide transition occurs mid-segment
+    next_slide = find_next_slide_after(sec["start"], sections)
+    if next_slide and next_slide["start"] < seg_end:
+        return f'[{sec["file"]} \u2192 {next_slide["file"]}]'
+    return f'[{sec["file"]}]'
+
+
+# --- Helpers for slides-only fallback mode -----------------------------------
+
 def find_slide_at(time, slides):
-    """Return the slide record active at `time` (or None if before first slide)."""
     active = None
     for slide in slides:
         if slide["start"] <= time:
@@ -42,28 +108,40 @@ def find_slide_at(time, slides):
 
 
 def find_transition_within(seg_start, seg_end, slides):
-    """
-    Return the first slide that starts strictly inside (seg_start, seg_end).
-    Used to detect mid-sentence slide changes.
-    """
     for slide in slides:
         if seg_start < slide["start"] < seg_end:
             return slide
     return None
 
 
-def build_header(slide_at_start, transition_slide):
-    """
-    Build the [slide_XXX.png] or [slide_XXX.png → slide_YYY.png] header string.
-    """
+def build_slide_header(slide_at_start, transition_slide):
     if transition_slide and transition_slide["file"] != slide_at_start["file"]:
-        return f'[{slide_at_start["file"]} → {transition_slide["file"]}]'
+        return f'[{slide_at_start["file"]} \u2192 {transition_slide["file"]}]'
     return f'[{slide_at_start["file"]}]'
 
 
-def merge(timestamps_path=TIMESTAMPS_FILE, transcript_path=TRANSCRIPT_FILE, output_path=OUTPUT_FILE):
+# ---------------------------------------------------------------------------
+
+def merge(
+    timestamps_path=TIMESTAMPS_FILE,
+    transcript_path=TRANSCRIPT_FILE,
+    output_path=OUTPUT_FILE,
+    sections_path=SECTIONS_FILE,
+    speaker_path=SPEAKER_FILE,
+):
     slides = load_json(timestamps_path)
     segments = load_json(transcript_path)
+
+    sections = load_json(sections_path) if os.path.exists(sections_path) else None
+    speaker_segs = load_json(speaker_path) if os.path.exists(speaker_path) else []
+
+    if sections:
+        print("Using sections.json for slide/face/black classification.")
+    else:
+        print("sections.json not found — falling back to slide-only mode.")
+
+    if speaker_segs:
+        print(f"Speaker data loaded: {len(speaker_segs)} segments.")
 
     lines = []
     prev_header = None
@@ -73,18 +151,24 @@ def merge(timestamps_path=TIMESTAMPS_FILE, transcript_path=TRANSCRIPT_FILE, outp
         seg_end   = seg["end"]
         text      = seg["text"]
 
-        slide_at_start = find_slide_at(seg_start, slides)
-        if slide_at_start is None:
-            # Segment before any slide — skip or attach to first slide
-            slide_at_start = slides[0] if slides else None
-        if slide_at_start is None:
+        if sections:
+            header = header_from_sections(seg_start, seg_end, sections, speaker_segs)
+        else:
+            slide_at_start = find_slide_at(seg_start, slides)
+            if slide_at_start is None:
+                slide_at_start = slides[0] if slides else None
+            if slide_at_start is None:
+                continue
+            transition = find_transition_within(seg_start, seg_end, slides)
+            header = build_slide_header(slide_at_start, transition)
+
+        if header is None:
+            # Black screen segment — skip and break grouping so the next real
+            # section always gets a fresh header even if it shares a label.
+            prev_header = None
             continue
 
-        transition_slide = find_transition_within(seg_start, seg_end, slides)
-        header = build_header(slide_at_start, transition_slide)
-
         if header != prev_header:
-            # Add a blank line between slide groups (except at the very start)
             if lines:
                 lines.append("")
             lines.append(header)
@@ -106,7 +190,8 @@ def merge(timestamps_path=TIMESTAMPS_FILE, transcript_path=TRANSCRIPT_FILE, outp
 
 if __name__ == "__main__":
     args = sys.argv[1:]
-    timestamps_path = args[0] if len(args) > 0 else TIMESTAMPS_FILE
-    transcript_path = args[1] if len(args) > 1 else TRANSCRIPT_FILE
-    output_path     = args[2] if len(args) > 2 else OUTPUT_FILE
-    merge(timestamps_path, transcript_path, output_path)
+    merge(
+        timestamps_path=args[0] if len(args) > 0 else TIMESTAMPS_FILE,
+        transcript_path=args[1] if len(args) > 1 else TRANSCRIPT_FILE,
+        output_path    =args[2] if len(args) > 2 else OUTPUT_FILE,
+    )
