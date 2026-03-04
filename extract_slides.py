@@ -109,7 +109,8 @@ def whisper_to_tesseract_lang(whisper_code):
 
 FACE_CROP_SIZE = 64           # Resize face crops to NxN before PCA
 PCA_COMPONENTS = 32           # Dimensions after PCA
-SPEAKER_COSINE_THRESHOLD = 0.30  # Cosine distance < this → same speaker
+SPEAKER_COSINE_THRESHOLD = 0.875  # Cosine distance < this → same speaker
+FACE_SAMPLE_INTERVAL = 10.0     # Collect a face crop every N seconds within a face section
 
 # ===================================================================
 # Section debounce
@@ -319,20 +320,19 @@ def _cosine_dist(a, b):
     return 1.0 - dot / (na * nb)
 
 
-def cluster_speakers(face_data):
-    """Cluster collected face features into speaker groups.
+def cluster_speakers(face_samples):
+    """Cluster face samples into speaker groups.
 
     Args:
-        face_data: list of (section_idx, feature_vector) tuples
+        face_samples: list of (t, feature_vector, frame) tuples
 
     Returns:
-        dict  { section_idx: "speaker_01", ... }
+        list of speaker_id strings, one per sample (same order as face_samples)
     """
-    if not face_data:
-        return {}
+    if not face_samples:
+        return []
 
-    indices = [d[0] for d in face_data]
-    features = np.array([d[1] for d in face_data])
+    features = np.array([s[1] for s in face_samples])
 
     # Standardise
     mean = features.mean(axis=0)
@@ -342,7 +342,7 @@ def cluster_speakers(face_data):
     # PCA (numpy SVD)
     n_comp = min(PCA_COMPONENTS, normed.shape[0], normed.shape[1])
     if n_comp < 1:
-        return {idx: "speaker_01" for idx in indices}
+        return ["speaker_01"] * len(face_samples)
 
     _, _, Vt = np.linalg.svd(normed, full_matrices=False)
     projected = normed @ Vt[:n_comp].T
@@ -350,8 +350,8 @@ def cluster_speakers(face_data):
     log.debug(f"PCA: {features.shape[1]}d → {n_comp}d  ({len(features)} samples)")
 
     # Greedy cosine clustering
-    centroids = []   # list of np.array
-    members = []     # list of [section_idx, ...]
+    centroids = []
+    cluster_ids = []  # cluster index per sample
 
     for i, feat in enumerate(projected):
         best_c, best_d = -1, float("inf")
@@ -362,23 +362,17 @@ def cluster_speakers(face_data):
                 best_c = ci
 
         if best_c >= 0 and best_d < SPEAKER_COSINE_THRESHOLD:
-            members[best_c].append(indices[i])
-            # Running centroid update
-            n = len(members[best_c])
+            cluster_ids.append(best_c)
+            n = cluster_ids.count(best_c)
             centroids[best_c] = centroids[best_c] * ((n - 1) / n) + feat / n
         else:
+            cluster_ids.append(len(centroids))
             centroids.append(feat.copy())
-            members.append([indices[i]])
 
-    labels = {}
-    for spk_idx, group in enumerate(members):
-        spk_id = f"speaker_{spk_idx + 1:02d}"
-        for sec_idx in group:
-            labels[sec_idx] = spk_id
-
-    log.info(f"Speaker clustering: {len(face_data)} face samples → "
+    speaker_ids = [f"speaker_{c + 1:02d}" for c in cluster_ids]
+    log.info(f"Speaker clustering: {len(face_samples)} face samples → "
              f"{len(centroids)} speaker(s)")
-    return labels
+    return speaker_ids
 
 
 # ===================================================================
@@ -456,7 +450,8 @@ def extract_slides(video_path, ocr_lang=None):
     # ---- face / speaker tracking ----
     face_candidate = None
     face_candidate_box = None
-    face_data = []           # [(section_idx, feature_vector)]  clustered at the end
+    face_samples = []        # [(t, feature, frame)]  — multiple per section, clustered at the end
+    face_last_sample_t = -999.0
 
     frame_idx = 0
     while True:
@@ -489,6 +484,10 @@ def extract_slides(video_path, ocr_lang=None):
                 elif ftype == "face":
                     face_candidate = frame
                     face_candidate_box = largest_face(faces)
+                    face_last_sample_t = t
+                    if face_candidate_box is not None:
+                        feat = extract_face_feature(frame, face_candidate_box)
+                        face_samples.append((t, feat, frame))
 
             # ---- same type as current section ----
             elif ftype == current_type:
@@ -561,6 +560,12 @@ def extract_slides(video_path, ocr_lang=None):
                     face_candidate = frame
                     if faces:
                         face_candidate_box = largest_face(faces)
+                    if faces and t - face_last_sample_t >= FACE_SAMPLE_INTERVAL:
+                        box = largest_face(faces)
+                        if box is not None:
+                            feat = extract_face_feature(frame, box)
+                            face_samples.append((t, feat, frame))
+                            face_last_sample_t = t
 
             # ---- different type → debounce ----
             else:
@@ -601,15 +606,10 @@ def extract_slides(video_path, ocr_lang=None):
                         slide_prev = None
                         slide_mask = None
 
-                    elif current_type == "face" and face_candidate is not None:
-                        sec_idx = len(all_sections)
-                        if face_candidate_box is not None:
-                            feat = extract_face_feature(face_candidate,
-                                                        face_candidate_box)
-                            face_data.append((sec_idx, feat))
+                    elif current_type == "face":
                         all_sections.append({
                             "type": "face",
-                            "file": None,   # assigned after clustering
+                            "file": None,
                             "start": round(section_start, 3),
                             "end": round(pending_start, 3),
                         })
@@ -641,6 +641,10 @@ def extract_slides(video_path, ocr_lang=None):
                     elif current_type == "face":
                         face_candidate = frame
                         face_candidate_box = largest_face(faces)
+                        face_last_sample_t = t
+                        if face_candidate_box is not None:
+                            feat = extract_face_feature(frame, face_candidate_box)
+                            face_samples.append((t, feat, frame))
 
         frame_idx += 1
 
@@ -665,11 +669,7 @@ def extract_slides(video_path, ocr_lang=None):
                 slide_records.append(rec)
                 all_sections.append({"type": "slide", **rec})
 
-    elif current_type == "face" and face_candidate is not None:
-        sec_idx = len(all_sections)
-        if face_candidate_box is not None:
-            feat = extract_face_feature(face_candidate, face_candidate_box)
-            face_data.append((sec_idx, feat))
+    elif current_type == "face":
         all_sections.append({
             "type": "face",
             "file": None,
@@ -686,52 +686,64 @@ def extract_slides(video_path, ocr_lang=None):
         })
 
     # ===============================================================
-    # Post-processing: cluster speakers via PCA
+    # Post-processing: cluster speakers via PCA, split face sections
     # ===============================================================
 
-    speaker_labels = cluster_speakers(face_data)
+    speaker_ids = cluster_speakers(face_samples)
 
-    # Build mapping: speaker_id → representative image filename
-    speaker_files = {}  # speaker_id → filename already saved
-
-    for sec_idx, spk_id in speaker_labels.items():
-        section = all_sections[sec_idx]
-        section["speaker"] = spk_id
-
-        if spk_id not in speaker_files:
-            # Find the face_data entry for this section to get the frame
-            # We need the original frame — re-read isn't practical, so we
-            # saved face_candidate at commit time.  We'll use the first
-            # occurrence's feature to pick a representative.
-            # For the image, we'll save it during the second pass below.
-            speaker_files[spk_id] = None  # placeholder
-
-    # Second pass: save one representative image per speaker.
-    # Re-open video briefly to grab frames at the right timestamps.
-    if speaker_files:
-        cap2 = cv2.VideoCapture(video_path)
-        for sec_idx, spk_id in speaker_labels.items():
-            if speaker_files.get(spk_id) is not None:
-                continue  # Already have an image for this speaker
-            section = all_sections[sec_idx]
-            # Seek to the middle of the section
-            mid_t = (section["start"] + section["end"]) / 2.0
-            cap2.set(cv2.CAP_PROP_POS_MSEC, mid_t * 1000)
-            ret, frame = cap2.read()
-            if ret:
-                spk_num = int(spk_id.split("_")[1])
-                fn = _save_face(frame, spk_num, section["start"], section["end"])
-                speaker_files[spk_id] = fn
-        cap2.release()
-
-    # Assign filenames to all face sections
-    for sec_idx, spk_id in speaker_labels.items():
-        all_sections[sec_idx]["file"] = speaker_files.get(spk_id)
-
-    # Face sections without a cluster assignment
+    # Split face sections where speaker changes within a section
+    new_sections = []
     for section in all_sections:
-        if section.get("type") == "face" and "speaker" not in section:
+        if section["type"] != "face":
+            new_sections.append(section)
+            continue
+
+        t_start, t_end = section["start"], section["end"]
+        samps = [(face_samples[i][0], speaker_ids[i])
+                 for i in range(len(face_samples))
+                 if t_start <= face_samples[i][0] <= t_end]
+
+        if not samps:
             section["speaker"] = "unknown"
+            new_sections.append(section)
+            continue
+
+        if len(set(s[1] for s in samps)) == 1:
+            section["speaker"] = samps[0][1]
+            new_sections.append(section)
+            continue
+
+        # Multiple speakers — split at midpoints between label changes
+        sub_start = t_start
+        cur_spk = samps[0][1]
+        for j in range(1, len(samps)):
+            t, spk = samps[j]
+            if spk != cur_spk:
+                boundary = round((samps[j - 1][0] + t) / 2.0, 3)
+                new_sections.append({"type": "face", "file": None,
+                                     "start": sub_start, "end": boundary,
+                                     "speaker": cur_spk})
+                sub_start = boundary
+                cur_spk = spk
+        new_sections.append({"type": "face", "file": None,
+                              "start": sub_start, "end": t_end,
+                              "speaker": cur_spk})
+
+    all_sections = new_sections
+
+    # Save one representative image per speaker (first sample frame)
+    speaker_files = {}
+    for i, (t, feat, frame) in enumerate(face_samples):
+        spk_id = speaker_ids[i]
+        if spk_id not in speaker_files:
+            spk_num = int(spk_id.split("_")[1])
+            fn = _save_face(frame, spk_num, t, t)
+            speaker_files[spk_id] = fn
+
+    # Assign filenames to face sections
+    for section in all_sections:
+        if section["type"] == "face":
+            section["file"] = speaker_files.get(section.get("speaker"))
 
     # ===============================================================
     # Write output

@@ -21,3 +21,5 @@
 - All thresholds made configurable as module constants at top of file
 - Slide count reduced from 31 to 16 — significantly fewer false positives
 - Ran Whisper model size comparison experiment (tiny/base/small/medium) with results in `experiment/whisper_size_comparison/`
+- Fixed speaker clustering: was collecting only one face crop per section — long Q&A blocks with multiple speakers all collapsed into one. Now samples every 10s within a face section and splits sections where speaker changes
+- Added `experiment/cosine_threshold_search/search.py` — binary-searches the cosine threshold against a known speaker count. Found `SPEAKER_COSINE_THRESHOLD = 0.875` for the test video (4 speakers, 85 samples, converged in 4 iterations)
