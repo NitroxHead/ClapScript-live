@@ -1,0 +1,914 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ClapScript Live</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f0f2f5;
+      color: #222;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Header ── */
+    header {
+      background: #12122a;
+      color: #fff;
+      padding: 10px 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      z-index: 10;
+    }
+
+    header h1 {
+      font-size: 1.15rem;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+      margin-right: auto;
+    }
+
+    header h1 span { color: #7c83fd; }
+
+    #status-msg {
+      font-size: 0.78rem;
+      color: #888;
+      max-width: 280px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    select {
+      padding: 5px 10px;
+      border-radius: 6px;
+      border: 1px solid #333;
+      background: #1e1e3a;
+      color: #fff;
+      font-size: 0.82rem;
+      cursor: pointer;
+      max-width: 200px;
+    }
+
+    .btn {
+      padding: 6px 16px;
+      border-radius: 6px;
+      border: none;
+      font-size: 0.83rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .btn:hover { opacity: 0.85; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    #btn-start { background: #4caf50; color: #fff; }
+    #btn-stop  { background: #e53935; color: #fff; display: none; }
+
+    /* ── Main layout ── */
+    main {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ── Left panel: slide + info ── */
+    #panel-slide {
+      width: 320px;
+      flex-shrink: 0;
+      background: #fff;
+      border-right: 1px solid #dde1ea;
+      display: flex;
+      flex-direction: column;
+      padding: 14px;
+      gap: 10px;
+      overflow-y: auto;
+    }
+
+    #slide-wrap {
+      background: #0a0a1a;
+      border-radius: 8px;
+      aspect-ratio: 16 / 9;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+
+    #slide-wrap img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: none;
+    }
+
+    #slide-placeholder {
+      color: #555;
+      font-size: 0.8rem;
+      text-align: center;
+      padding: 12px;
+      line-height: 1.5;
+    }
+
+    #slide-num {
+      font-size: 0.75rem;
+      color: #aaa;
+      text-align: right;
+    }
+
+    .info-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.82rem;
+    }
+
+    .info-label {
+      color: #999;
+      min-width: 56px;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+
+    .badge {
+      padding: 2px 10px;
+      border-radius: 100px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+
+    .section-slide  { background: #e3f2fd; color: #1565c0; }
+    .section-face   { background: #f3e5f5; color: #6a1b9a; }
+    .section-black  { background: #f0f0f0; color: #777; }
+    .section-none   { background: #f0f0f0; color: #aaa; }
+
+    /* Speaker badge colors (1–5, cycling) */
+    .spk-bg-1 { background: #e3f2fd; color: #1565c0; }
+    .spk-bg-2 { background: #ffebee; color: #c62828; }
+    .spk-bg-3 { background: #e8f5e9; color: #2e7d32; }
+    .spk-bg-4 { background: #fff8e1; color: #e65100; }
+    .spk-bg-5 { background: #f3e5f5; color: #4a148c; }
+
+    /* Speaker text colors */
+    .spk-1 { color: #1565c0; }
+    .spk-2 { color: #c62828; }
+    .spk-3 { color: #2e7d32; }
+    .spk-4 { color: #e65100; }
+    .spk-5 { color: #4a148c; }
+
+    /* ── Right panel: transcript ── */
+    #panel-transcript {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-width: 0;
+    }
+
+    #transcript-title {
+      padding: 10px 18px;
+      background: #fff;
+      border-bottom: 1px solid #dde1ea;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      flex-shrink: 0;
+    }
+
+    #transcript-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      scroll-behavior: smooth;
+    }
+
+    .transcript-group {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .transcript-speaker {
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .transcript-text {
+      font-size: 0.93rem;
+      line-height: 1.55;
+      color: #1a1a2e;
+    }
+
+    #partial-bar {
+      padding: 8px 18px;
+      background: #fafbfc;
+      border-top: 1px solid #eee;
+      font-size: 0.87rem;
+      color: #aaa;
+      font-style: italic;
+      min-height: 34px;
+      flex-shrink: 0;
+    }
+
+    /* ── Slide modal ── */
+    #slide-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.85);
+      z-index: 1000;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+    }
+    #slide-modal.open { display: flex; }
+
+    #modal-img {
+      max-width: 92vw;
+      max-height: 78vh;
+      object-fit: contain;
+      border-radius: 6px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+    }
+
+    #modal-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: #fff;
+      font-size: 0.85rem;
+    }
+
+    .modal-btn {
+      background: rgba(255,255,255,0.12);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 6px 14px;
+      font-size: 0.85rem;
+      cursor: pointer;
+    }
+    .modal-btn:hover { background: rgba(255,255,255,0.22); }
+    .modal-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+    .modal-btn.danger { background: rgba(220,50,50,0.5); }
+    .modal-btn.danger:hover { background: rgba(220,50,50,0.8); }
+
+    #modal-close {
+      position: fixed;
+      top: 16px;
+      right: 20px;
+      background: none;
+      border: none;
+      color: #fff;
+      font-size: 1.6rem;
+      cursor: pointer;
+      line-height: 1;
+      opacity: 0.7;
+    }
+    #modal-close:hover { opacity: 1; }
+
+    /* Make thumbnail clickable */
+    #slide-wrap { cursor: zoom-in; }
+
+    /* ── Footer ── */
+    footer {
+      padding: 8px 18px;
+      background: #fff;
+      border-top: 1px solid #dde1ea;
+      display: flex;
+      justify-content: flex-end;
+      flex-shrink: 0;
+    }
+
+    .dl-wrap {
+      position: relative;
+      display: inline-flex;
+    }
+
+    #btn-download {
+      background: #12122a;
+      color: #fff;
+      border-radius: 6px 0 0 6px;
+    }
+
+    #btn-download-arrow {
+      background: #1e1e3a;
+      color: #fff;
+      padding: 6px 8px;
+      border-radius: 0 6px 6px 0;
+      border: none;
+      border-left: 1px solid #333;
+      cursor: pointer;
+      font-size: 0.75rem;
+    }
+    #btn-download-arrow:hover { opacity: 0.85; }
+
+    #dl-menu {
+      display: none;
+      position: absolute;
+      bottom: calc(100% + 4px);
+      right: 0;
+      background: #1e1e3a;
+      border: 1px solid #333;
+      border-radius: 6px;
+      overflow: hidden;
+      min-width: 160px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      z-index: 100;
+    }
+
+    #dl-menu.open { display: block; }
+
+    #dl-menu button {
+      display: block;
+      width: 100%;
+      padding: 8px 14px;
+      background: none;
+      border: none;
+      color: #ddd;
+      font-size: 0.83rem;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    #dl-menu button:hover { background: #2a2a4a; color: #fff; }
+    #dl-menu button.active { font-weight: 700; color: #7c83fd; }
+
+    /* Hidden video element for frame capture */
+    #capture-video { display: none; }
+    #capture-canvas { display: none; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Clap<span>Script</span> Live</h1>
+  <span id="status-msg">Idle</span>
+  <select id="lang-select">
+    <option value="en">English</option>
+    <option value="de">Deutsch</option>
+    <option value="fr">Français</option>
+    <option value="es">Español</option>
+    <option value="it">Italiano</option>
+    <option value="pt">Português</option>
+    <option value="ru">Русский</option>
+    <option value="nl">Nederlands</option>
+    <option value="pl">Polski</option>
+    <option value="uk">Українська</option>
+    <option value="hi">हिन्दी</option>
+    <option value="ja">日本語</option>
+    <option value="zh">中文</option>
+    <option value="ko">한국어</option>
+    <option value="tr">Türkçe</option>
+  </select>
+  <span id="audio-indicator" title="Audio capture status" style="font-size:0.8rem;display:none">🎤 <span id="audio-label" style="color:#f88">no audio</span></span>
+  <button id="btn-start" class="btn">▶ Start</button>
+  <button id="btn-stop"  class="btn">■ Stop</button>
+</header>
+
+<main>
+  <!-- Left: slide thumbnail + status -->
+  <div id="panel-slide">
+    <div id="slide-wrap">
+      <div id="slide-placeholder">
+        Click <strong>Start</strong> and share your screen.<br>
+        Slide thumbnails appear here.
+      </div>
+      <img id="slide-img" alt="Current slide">
+    </div>
+
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:6px">
+      <button id="btn-prev" class="btn" style="padding:4px 10px;background:#e0e0e0;color:#333;font-size:0.8rem" disabled>‹</button>
+      <div id="slide-num" style="font-size:0.75rem;color:#aaa;flex:1;text-align:center">Slide —</div>
+      <button id="btn-next" class="btn" style="padding:4px 10px;background:#e0e0e0;color:#333;font-size:0.8rem" disabled>›</button>
+    </div>
+
+    <div class="info-row">
+      <span class="info-label">Section</span>
+      <span id="section-badge" class="badge section-none">—</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Speaker</span>
+      <span id="speaker-badge" class="badge" style="background:#f0f0f0;color:#aaa">—</span>
+    </div>
+  </div>
+
+  <!-- Right: transcript -->
+  <div id="panel-transcript">
+    <div id="transcript-title">Live Transcript</div>
+    <div id="transcript-body"></div>
+    <div id="partial-bar"></div>
+  </div>
+</main>
+
+<footer>
+  <div class="dl-wrap">
+    <button id="btn-download" class="btn">↓ Download All</button>
+    <button id="btn-download-arrow">▲</button>
+    <div id="dl-menu">
+      <button id="dl-all" class="active">↓ All (zip)</button>
+      <button id="dl-transcript">↓ Transcript</button>
+      <button id="dl-slides">↓ Slides</button>
+    </div>
+  </div>
+</footer>
+
+<div id="slide-modal">
+  <button id="modal-close">✕</button>
+  <img id="modal-img" alt="Slide">
+  <div id="modal-toolbar">
+    <button class="modal-btn" id="modal-prev">‹ Prev</button>
+    <span id="modal-label">Slide 1 of 1</span>
+    <button class="modal-btn" id="modal-next">Next ›</button>
+    <button class="modal-btn danger" id="modal-delete">Delete</button>
+  </div>
+</div>
+
+<video id="capture-video" autoplay muted playsinline></video>
+<canvas id="capture-canvas"></canvas>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+// ================================================================
+// State
+// ================================================================
+let ws = null;
+let mediaStream = null;
+let audioCtx = null;
+let scriptNode = null;
+let frameInterval = null;
+let transcriptSegments = [];
+let slides = [];  // [{index, b64}]
+let slideView = -1;  // which slide is shown (-1 = follow latest)
+let lastSpeaker = null;
+
+// Assign each speaker a color index (1–5, cycling)
+const speakerColorIdx = {};
+let nextColor = 1;
+
+function getSpeakerColor(spk) {
+  if (!spk) return 1;
+  if (!speakerColorIdx[spk]) {
+    speakerColorIdx[spk] = nextColor;
+    nextColor = (nextColor % 5) + 1;
+  }
+  return speakerColorIdx[spk];
+}
+
+// ================================================================
+// DOM shortcuts
+// ================================================================
+const $ = id => document.getElementById(id);
+
+function setStatus(msg) {
+  $('status-msg').textContent = msg;
+}
+
+function updateSection(section) {
+  const el = $('section-badge');
+  el.className = `badge section-${section || 'none'}`;
+  const labels = { slide: '● Slide', face: '● Face', black: '● Black' };
+  el.textContent = labels[section] || '—';
+}
+
+function updateSpeaker(spk) {
+  const el = $('speaker-badge');
+  if (!spk) {
+    el.className = 'badge';
+    el.style.cssText = 'background:#f0f0f0;color:#aaa';
+    el.textContent = '—';
+    return;
+  }
+  const ci = getSpeakerColor(spk);
+  el.className = `badge spk-bg-${ci}`;
+  el.style.cssText = '';
+  el.textContent = spk;
+}
+
+function renderSlide(pos) {
+  if (slides.length === 0) return;
+  const s = slides[pos];
+  $('slide-img').src = 'data:image/jpeg;base64,' + s.b64;
+  $('slide-img').style.display = 'block';
+  $('slide-placeholder').style.display = 'none';
+  $('slide-num').textContent = `Slide ${s.index} of ${slides.length}`;
+  $('btn-prev').disabled = pos === 0;
+  $('btn-next').disabled = pos === slides.length - 1;
+}
+
+function showSlide(slideIndex, thumbnailB64) {
+  slides.push({ index: slideIndex, b64: thumbnailB64 });
+  // Only auto-advance if user is following latest (or no slide browsed yet)
+  if (slideView === -1 || slideView === slides.length - 2) {
+    slideView = slides.length - 1;
+  }
+  renderSlide(slideView);
+}
+
+function appendTranscript(speaker, text) {
+  const body = $('transcript-body');
+
+  // Show speaker label only when speaker changes to a known (non-null) value
+  if (speaker && speaker !== lastSpeaker) {
+    const ci = getSpeakerColor(speaker);
+    const spkEl = document.createElement('div');
+    spkEl.className = `transcript-speaker spk-${ci}`;
+    spkEl.textContent = speaker;
+    body.appendChild(spkEl);
+    lastSpeaker = speaker;
+  }
+
+  // Always one new line per segment — never collapse unknown-speaker text into a blob
+  const textEl = document.createElement('div');
+  textEl.className = 'transcript-text';
+  textEl.textContent = text;
+  body.appendChild(textEl);
+
+  body.scrollTop = body.scrollHeight;
+}
+
+// ================================================================
+// Slide modal (big view + delete)
+// ================================================================
+function openModal(pos) {
+  slideView = pos;
+  renderModal();
+  $('slide-modal').classList.add('open');
+}
+
+function closeModal() {
+  $('slide-modal').classList.remove('open');
+}
+
+function renderModal() {
+  if (slides.length === 0) { closeModal(); return; }
+  const s = slides[slideView];
+  $('modal-img').src = 'data:image/jpeg;base64,' + s.b64;
+  $('modal-label').textContent = `Slide ${s.index} of ${slides.length}`;
+  $('modal-prev').disabled = slideView === 0;
+  $('modal-next').disabled = slideView === slides.length - 1;
+}
+
+function deleteSlide(pos) {
+  slides.splice(pos, 1);
+  if (slides.length === 0) { closeModal(); renderSlide(-1); return; }
+  slideView = Math.min(pos, slides.length - 1);
+  renderModal();
+  renderSlide(slideView);
+}
+
+function setPartial(text) {
+  $('partial-bar').textContent = text ? `… ${text}` : '';
+}
+
+// ================================================================
+// WebSocket
+// ================================================================
+function connectWS(lang) {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ lang }));
+    setStatus('Connecting...');
+  };
+
+  ws.onmessage = (evt) => {
+    const msg = JSON.parse(evt.data);
+    switch (msg.type) {
+      case 'status':
+        setStatus(msg.message);
+        break;
+      case 'audio_status':
+        if (msg.ok) {
+          $('audio-indicator').style.display = '';
+          $('audio-label').textContent = 'audio ✓';
+          $('audio-label').style.color = '#6f6';
+        }
+        break;
+      case 'section_change':
+        updateSection(msg.section);
+        if (msg.speaker) updateSpeaker(msg.speaker);
+        break;
+      case 'slide_change':
+        showSlide(msg.slide_index, msg.thumbnail);
+        break;
+      case 'speaker_update':
+        updateSpeaker(msg.speaker);
+        break;
+      case 'transcript_partial':
+        setPartial(msg.text);
+        break;
+      case 'transcript_final':
+        setPartial('');
+        transcriptSegments.push({ speaker: msg.speaker, text: msg.text, t: msg.t });
+        appendTranscript(msg.speaker, msg.text);
+        break;
+    }
+  };
+
+  ws.onclose = () => {
+    setStatus('Disconnected');
+    stopCapture();
+  };
+
+  ws.onerror = () => {
+    setStatus('Connection error — is the server running?');
+    stopCapture();
+  };
+}
+
+// ================================================================
+// Binary frame helpers
+// ================================================================
+function sendBinary(typeCode, arrayBuffer) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const src = new Uint8Array(arrayBuffer);
+  const msg = new Uint8Array(1 + src.length);
+  msg[0] = typeCode;
+  msg.set(src, 1);
+  ws.send(msg);
+}
+
+// ================================================================
+// Screen + audio capture
+// ================================================================
+async function startCapture() {
+  const lang = $('lang-select').value;
+
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: { ideal: 1, max: 5 } },
+      audio: true,
+    });
+  } catch (e) {
+    setStatus('Screen share cancelled or denied');
+    return;
+  }
+  mediaStream = stream;
+
+  // Update UI
+  $('btn-start').style.display = 'none';
+  $('btn-stop').style.display = '';
+  $('lang-select').disabled = true;
+
+  // Connect WebSocket
+  connectWS(lang);
+
+  // Video capture via canvas at 1fps
+  const videoTrack = stream.getVideoTracks()[0];
+  const settings = videoTrack.getSettings();
+  const canvas = $('capture-canvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width  = settings.width  || 1280;
+  canvas.height = settings.height || 720;
+
+  const video = $('capture-video');
+  video.srcObject = new MediaStream([videoTrack]);
+  await video.play().catch(() => {});
+
+  frameInterval = setInterval(() => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (video.readyState < 2) return;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob(blob => {
+      if (!blob) return;
+      blob.arrayBuffer().then(buf => sendBinary(0x01, buf));
+    }, 'image/jpeg', 0.7);
+  }, 1000);
+
+  // Audio capture from display media (works when sharing a Chrome tab with "Share audio")
+  await startAudioCapture();
+
+  // Stop when user ends share
+  stream.addEventListener('inactive', stopCapture);
+}
+
+function stopCapture() {
+  clearInterval(frameInterval);
+  frameInterval = null;
+
+  if (scriptNode) {
+    scriptNode.disconnect();
+    scriptNode = null;
+  }
+  if (audioCtx) {
+    audioCtx.close().catch(() => {});
+    audioCtx = null;
+  }
+
+  const video = $('capture-video');
+  video.srcObject = null;
+
+  if (mediaStream) {
+    mediaStream.getTracks().forEach(t => t.stop());
+    mediaStream = null;
+  }
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.close();
+    ws = null;
+  }
+
+  $('btn-start').style.display = '';
+  $('btn-stop').style.display = 'none';
+  $('lang-select').disabled = false;
+  setStatus('Stopped');
+}
+
+// ================================================================
+// Audio device enumeration + capture
+// ================================================================
+async function startAudioCapture() {
+  if (scriptNode) { scriptNode.disconnect(); scriptNode = null; }
+  if (audioCtx)   { await audioCtx.close().catch(() => {}); audioCtx = null; }
+
+  $('audio-indicator').style.display = '';
+  const audioTrack = mediaStream ? mediaStream.getAudioTracks()[0] || null : null;
+
+  if (!audioTrack) {
+    $('audio-label').textContent = 'no audio ✗';
+    $('audio-label').style.color = '#f88';
+    setStatus('No audio — share a tab and check "Share audio" in the dialog');
+    return;
+  }
+
+  $('audio-label').textContent = 'audio…';
+  $('audio-label').style.color = '#fa0';
+
+  try {
+    // Use native sample rate — resample to 16kHz manually before sending
+    audioCtx = new AudioContext();
+    const nativeRate = audioCtx.sampleRate;
+    console.log('[audio] AudioContext sampleRate:', nativeRate);
+    const source = audioCtx.createMediaStreamSource(new MediaStream([audioTrack]));
+    scriptNode = audioCtx.createScriptProcessor(4096, 1, 1);
+    let packetsSent = 0;
+    scriptNode.onaudioprocess = (e) => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      const float32 = e.inputBuffer.getChannelData(0);
+      // Linear interpolation downsample to 16kHz
+      const ratio = nativeRate / 16000;
+      const outLen = Math.floor(float32.length / ratio);
+      const down = new Float32Array(outLen);
+      for (let i = 0; i < outLen; i++) {
+        const pos = i * ratio;
+        const idx = Math.floor(pos);
+        const frac = pos - idx;
+        down[i] = idx + 1 < float32.length
+          ? float32[idx] * (1 - frac) + float32[idx + 1] * frac
+          : float32[idx];
+      }
+      const int16 = new Int16Array(outLen);
+      for (let i = 0; i < outLen; i++) {
+        int16[i] = Math.max(-32768, Math.min(32767, down[i] * 32768));
+      }
+      sendBinary(0x02, int16.buffer);
+      if (++packetsSent === 1) console.log('[audio] first packet sent, outLen:', outLen);
+    };
+    source.connect(scriptNode);
+    scriptNode.connect(audioCtx.destination);
+    console.log('[audio] pipeline ready');
+  } catch (e) {
+    console.error('[audio] AudioContext setup failed:', e);
+    $('audio-label').textContent = 'audio error';
+    $('audio-label').style.color = '#f88';
+  }
+}
+
+// ================================================================
+// Download helpers
+// ================================================================
+function buildMarkdown() {
+  const lines = ['# ClapScript Live Transcript\n'];
+  let prevSpk = null;
+  for (const seg of transcriptSegments) {
+    const spk = seg.speaker || 'unknown';
+    if (spk !== prevSpk) { lines.push(`\n**[${spk}]**\n`); prevSpk = spk; }
+    lines.push(seg.text);
+  }
+  return lines.join('\n');
+}
+
+function timestamp() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+}
+
+function triggerDownload(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function downloadAll() {
+  if (transcriptSegments.length === 0 && slides.length === 0) { alert('Nothing to download yet.'); return; }
+  const btn = $('btn-download');
+  btn.disabled = true; btn.textContent = '… Building';
+  const zip = new JSZip();
+  zip.file('transcript.md', buildMarkdown());
+  const folder = zip.folder('slides');
+  for (const s of slides)
+    folder.file(`slide_${String(s.index).padStart(3,'0')}.jpg`, s.b64, { base64: true });
+  triggerDownload(await zip.generateAsync({ type: 'blob' }), `clapscript_${timestamp()}.zip`);
+  btn.disabled = false; btn.textContent = '↓ Download All';
+}
+
+function downloadTranscriptOnly() {
+  if (transcriptSegments.length === 0) { alert('No transcript yet.'); return; }
+  triggerDownload(new Blob([buildMarkdown()], { type: 'text/markdown' }), `transcript_${timestamp()}.md`);
+}
+
+async function downloadSlidesOnly() {
+  if (slides.length === 0) { alert('No slides yet.'); return; }
+  const zip = new JSZip();
+  for (const s of slides)
+    zip.file(`slide_${String(s.index).padStart(3,'0')}.jpg`, s.b64, { base64: true });
+  triggerDownload(await zip.generateAsync({ type: 'blob' }), `slides_${timestamp()}.zip`);
+}
+
+// ================================================================
+// Download menu
+// ================================================================
+let dlMode = 'all';
+
+function setDlMode(mode) {
+  dlMode = mode;
+  const labels = { all: '↓ Download All', transcript: '↓ Transcript', slides: '↓ Slides' };
+  $('btn-download').textContent = labels[mode];
+  ['dl-all','dl-transcript','dl-slides'].forEach(id => $('dl-menu').querySelector('#'+id).classList.remove('active'));
+  $('dl-' + (mode === 'transcript' ? 'transcript' : mode === 'slides' ? 'slides' : 'all')).classList.add('active');
+  closeDlMenu();
+}
+
+function closeDlMenu() { $('dl-menu').classList.remove('open'); }
+function toggleDlMenu() { $('dl-menu').classList.toggle('open'); }
+
+// ================================================================
+// Event listeners
+// ================================================================
+$('btn-start').addEventListener('click', startCapture);
+$('btn-stop').addEventListener('click', stopCapture);
+$('btn-prev').addEventListener('click', () => {
+  if (slideView > 0) { slideView--; renderSlide(slideView); }
+});
+$('btn-next').addEventListener('click', () => {
+  if (slideView < slides.length - 1) { slideView++; renderSlide(slideView); }
+});
+
+// Open modal on thumbnail click
+$('slide-wrap').addEventListener('click', () => { if (slides.length) openModal(slideView); });
+
+// Modal controls
+$('modal-close').addEventListener('click', closeModal);
+$('modal-prev').addEventListener('click', () => { if (slideView > 0) { slideView--; renderModal(); renderSlide(slideView); } });
+$('modal-next').addEventListener('click', () => { if (slideView < slides.length - 1) { slideView++; renderModal(); renderSlide(slideView); } });
+$('modal-delete').addEventListener('click', () => deleteSlide(slideView));
+$('slide-modal').addEventListener('click', (e) => { if (e.target === $('slide-modal')) closeModal(); });
+
+// Keyboard navigation in modal
+document.addEventListener('keydown', (e) => {
+  if (!$('slide-modal').classList.contains('open')) return;
+  if (e.key === 'ArrowLeft')  $('modal-prev').click();
+  if (e.key === 'ArrowRight') $('modal-next').click();
+  if (e.key === 'Escape')     closeModal();
+  if (e.key === 'Delete')     deleteSlide(slideView);
+});
+
+$('btn-download').addEventListener('click', () => {
+  if (dlMode === 'transcript') downloadTranscriptOnly();
+  else if (dlMode === 'slides') downloadSlidesOnly();
+  else downloadAll();
+});
+$('btn-download-arrow').addEventListener('click', (e) => { e.stopPropagation(); toggleDlMenu(); });
+$('dl-all').addEventListener('click', () => setDlMode('all'));
+$('dl-transcript').addEventListener('click', () => setDlMode('transcript'));
+$('dl-slides').addEventListener('click', () => setDlMode('slides'));
+document.addEventListener('click', closeDlMenu);
+</script>
+</body>
+</html>

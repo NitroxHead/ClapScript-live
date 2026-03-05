@@ -1,42 +1,50 @@
-# ClapScript
+# ClapScript Live
 
-Turn a presentation screen recording into a synced transcript with slide images.
+Real-time slide detection, speaker identification, and transcription in the browser — the live counterpart to [ClapScript](https://github.com/anthropics/ClapScript).
 
-Given a video of a presentation (slides + optional webcam), ClapScript extracts the slides, transcribes the audio, identifies speakers, and produces a timestamped markdown transcript linked to slide images.
-
-## Output
-
-- Extracted slide images (final version of each slide)
-- Speaker face snapshots (one per speaker section)
-- Timestamped transcript synced to slides in markdown
+Share your screen while presenting or attending a talk. Slide thumbnails appear on transitions, the transcript rolls in as people speak, and speakers are labeled when faces are detected.
 
 ## How it works
 
-1. **`extract_slides.py`** — Samples video at ~1fps. Uses OpenCV DNN face detection to classify frames as slide or face. Detects slide transitions via masked pixel-diff. Clusters face crops with PCA + cosine distance for speaker identification.
-2. **`transcribe_audio.py`** — Transcribes audio using faster-whisper (medium model, CPU, int8).
-3. **`merge_transcript.py`** — Maps transcript segments to the slide or speaker visible at that time. Outputs synced markdown.
-4. **`run_all.py`** — Runs all steps in parallel, then merges.
+- Browser captures screen + audio via `getDisplayMedia` and streams JPEG frames (1fps) + PCM audio over a WebSocket
+- Server detects slide transitions and faces using the same pixel-diff and DNN logic as ClapScript
+- [Vosk](https://alphacephei.com/vosk/) provides streaming speech-to-text — text appears as you speak, no buffering
 
 ## Usage
 
-```
-python3 run_all.py recording.mp4
+```bash
+pip install fastapi "uvicorn[standard]" vosk opencv-python numpy
+cd live && python3 server.py
 ```
 
-Output goes to `output/`.
+Open **http://localhost:8000** in Chrome. Click **Start**, share a browser tab, and tick **Share audio** in the dialog.
+
+## Features
+
+- Slide thumbnails update on transitions
+- Click any slide for full-size view — navigate with ‹/›, delete with the Delete key
+- Transcript appears line-by-line in real time; speaker labels added when identified
+- Language dropdown — Vosk models for 15 languages auto-downloaded on first use (~40MB each, saved to `live/vosk_models/`)
+- Download: All (transcript + slides as zip), Transcript only (.md), or Slides only (.zip)
 
 ## Dependencies
 
-- Python 3
-- opencv-python
-- faster-whisper
-- numpy
+```
+fastapi  uvicorn[standard]  vosk  opencv-python  numpy
+```
 
-The DNN face model files (~5MB) are downloaded automatically on first run.
+The OpenCV DNN face model (~5MB) and Vosk language models are downloaded automatically on first run.
 
-## Optional
+## Architecture
 
-Speaker diarization via pyannote.audio is available as a standalone script (`diarize_speakers.py`) but not integrated into the main pipeline. Requires a HuggingFace token (`HF_TOKEN`).
+```
+live/
+  server.py        FastAPI app — WebSocket, frame processing, Vosk STT
+  static/
+    index.html     Single-page UI (no build step)
+```
+
+`server.py` imports face detection and slide-diff logic directly from `extract_slides.py` in the repo root. The core algorithms are unchanged from ClapScript — only the transport layer (WebSocket instead of video file) and speaker clustering (incremental instead of batch) differ.
 
 ## License
 
