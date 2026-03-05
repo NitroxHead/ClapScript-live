@@ -390,6 +390,9 @@
 <main>
   <!-- Left: slide thumbnail + status -->
   <div id="panel-slide">
+    <div style="display:flex;justify-content:flex-end">
+      <button id="btn-clear-slides" class="btn" style="padding:3px 8px;background:#fce4e4;color:#c62828;font-size:0.72rem">Clear Slides</button>
+    </div>
     <div id="slide-wrap">
       <div id="slide-placeholder">
         Click <strong>Start</strong> and share your screen.<br>
@@ -416,7 +419,10 @@
 
   <!-- Right: transcript -->
   <div id="panel-transcript">
-    <div id="transcript-title">Live Transcript</div>
+    <div id="transcript-title" style="display:flex;align-items:center;justify-content:space-between">
+      <span>Live Transcript</span>
+      <button id="btn-clear-transcript" class="btn" style="padding:3px 8px;background:#fce4e4;color:#c62828;font-size:0.72rem">Clear Transcript</button>
+    </div>
     <div id="transcript-body"></div>
     <div id="partial-bar"></div>
   </div>
@@ -873,6 +879,23 @@ function toggleDlMenu() { $('dl-menu').classList.toggle('open'); }
 // ================================================================
 $('btn-start').addEventListener('click', startCapture);
 $('btn-stop').addEventListener('click', stopCapture);
+$('btn-clear-slides').addEventListener('click', () => {
+  if (!confirm('Clear all slides?')) return;
+  slides = []; slideView = -1;
+  $('slide-img').style.display = 'none';
+  $('slide-placeholder').style.display = '';
+  $('slide-num').textContent = 'Slide —';
+  $('btn-prev').disabled = true;
+  $('btn-next').disabled = true;
+});
+
+$('btn-clear-transcript').addEventListener('click', () => {
+  if (!confirm('Clear transcript?')) return;
+  transcriptSegments = []; lastSpeaker = null;
+  $('transcript-body').innerHTML = '';
+  $('partial-bar').textContent = '';
+});
+
 $('btn-prev').addEventListener('click', () => {
   if (slideView > 0) { slideView--; renderSlide(slideView); }
 });
