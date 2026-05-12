@@ -22,6 +22,7 @@ import sys
 import time
 import urllib.request
 import zipfile
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import cv2
@@ -104,6 +105,30 @@ FACE_SAMPLE_INTERVAL = 2.0  # Minimum seconds between face samples
 # Slide thumbnails
 THUMBNAIL_WIDTH = 800
 
+# Idle exit (socket activation mode only)
+IDLE_EXIT_TIMEOUT = 300   # seconds of no connections before exiting
+
+# ===================================================================
+# Connection tracking (for idle-exit under socket activation)
+# ===================================================================
+
+_active_connections = 0
+_last_disconnect = 0.0
+
+
+async def _idle_exit_watcher():
+    """Exit when no clients have connected for IDLE_EXIT_TIMEOUT seconds.
+
+    Only used under systemd socket activation (LISTEN_FDS set). systemd keeps
+    the TCP socket open, so the next connection will re-activate the service.
+    """
+    while True:
+        await asyncio.sleep(60)
+        if _active_connections == 0 and time.time() - _last_disconnect >= IDLE_EXIT_TIMEOUT:
+            log.info("Idle timeout - exiting (systemd will restart on next connection)")
+            sys.exit(0)
+
+
 # ===================================================================
 # Global face detector (loaded once at startup)
 # ===================================================================
@@ -174,6 +199,7 @@ def new_session(lang: str = "en") -> dict:
         "last_face_t": -999.0,
         "samples_since_pca": 0,
         # Output
+        "slides": [],             # [(slide_index, jpeg_bytes)] for session save
         "transcript_segments": [],
         "recognizer": None,
     }
@@ -267,13 +293,15 @@ def identify_speaker(state, feature, t):
 # Frame processing (synchronous — run via asyncio.to_thread)
 # ===================================================================
 
-def _encode_thumbnail(frame) -> str:
+def _encode_thumbnail(frame) -> tuple[str, bytes]:
+    """Return (base64_str, jpeg_bytes) for a frame scaled to THUMBNAIL_WIDTH."""
     h, w = frame.shape[:2]
     if w > THUMBNAIL_WIDTH:
         scale = THUMBNAIL_WIDTH / w
         frame = cv2.resize(frame, (THUMBNAIL_WIDTH, int(h * scale)))
     _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-    return base64.b64encode(buf.tobytes()).decode()
+    jpeg = buf.tobytes()
+    return base64.b64encode(jpeg).decode(), jpeg
 
 
 def process_frame_sync(state, jpeg_bytes) -> list:
@@ -292,6 +320,14 @@ def process_frame_sync(state, jpeg_bytes) -> list:
     faces = detect_faces(frame, detector)
     ftype = classify_layout(frame, faces)
     current_type = state["current_type"]
+    log.debug(f"t={t:.1f} layout={ftype} faces={len(faces)} current={current_type}")
+
+    def _emit_slide(f, idx_override=None):
+        thumb, jpeg = _encode_thumbnail(f)
+        idx = idx_override if idx_override is not None else state["slide_index"]
+        state["slides"].append((idx, jpeg))
+        log.info(f"Slide {idx} captured (t={t:.1f}s, total={len(state['slides'])})")
+        return json.dumps({"type": "slide_change", "slide_index": idx, "thumbnail": thumb})
 
     # --- Bootstrap: first frame ---
     if current_type is None:
@@ -304,11 +340,7 @@ def process_frame_sync(state, jpeg_bytes) -> list:
             state["slide_start"] = t
             state["slide_prev"] = frame
             state["slide_mask"] = build_face_mask(frame.shape, faces) if faces else None
-            msgs.append(json.dumps({
-                "type": "slide_change",
-                "slide_index": state["slide_index"],
-                "thumbnail": _encode_thumbnail(frame),
-            }))
+            msgs.append(_emit_slide(frame, state["slide_index"]))
         elif ftype == "face":
             face = largest_face(faces)
             if face is not None:
@@ -338,8 +370,10 @@ def process_frame_sync(state, jpeg_bytes) -> list:
 
             if state["slide_prev"] is not None:
                 diff = compute_slide_diff(state["slide_prev"], frame, state["slide_mask"])
+                log.debug(f"  slide diff={diff:.3f} threshold={SLIDE_CHANGE_FRACTION} duration={t - state['slide_start']:.1f}s")
                 if diff >= SLIDE_CHANGE_FRACTION:
-                    if t - state["slide_start"] >= MIN_SLIDE_DURATION:
+                    dur = t - state["slide_start"]
+                    if dur >= MIN_SLIDE_DURATION:
                         candidate = state["slide_candidate"]
                         is_dup = False
                         if state["last_saved_slide"] is not None:
@@ -347,14 +381,14 @@ def process_frame_sync(state, jpeg_bytes) -> list:
                                 state["last_saved_slide"], candidate, state["slide_mask"]
                             )
                             is_dup = dd < SLIDE_DEDUP_FRACTION
+                            if is_dup:
+                                log.info(f"Slide skipped - dup (dd={dd:.3f})")
                         if not is_dup:
                             state["slide_index"] += 1
                             state["last_saved_slide"] = candidate
-                            msgs.append(json.dumps({
-                                "type": "slide_change",
-                                "slide_index": state["slide_index"],
-                                "thumbnail": _encode_thumbnail(candidate),
-                            }))
+                            msgs.append(_emit_slide(candidate, state["slide_index"]))
+                    else:
+                        log.info(f"Slide skipped - too short ({dur:.1f}s < {MIN_SLIDE_DURATION}s), diff={diff:.3f}")
                     state["slide_start"] = t
 
             state["slide_candidate"] = frame
@@ -385,10 +419,12 @@ def process_frame_sync(state, jpeg_bytes) -> list:
     # Commit the section transition
     pending_type = state["pending_type"]
     pending_start = state["pending_start"]
+    log.info(f"Section: {current_type} → {pending_type} at t={t:.1f}s")
 
     # Finalize outgoing slide: send last stable candidate
     if current_type == "slide" and state["slide_candidate"] is not None:
-        if pending_start - state["slide_start"] >= MIN_SLIDE_DURATION:
+        dur = pending_start - state["slide_start"]
+        if dur >= MIN_SLIDE_DURATION:
             candidate = state["slide_candidate"]
             is_dup = False
             if state["last_saved_slide"] is not None:
@@ -396,14 +432,14 @@ def process_frame_sync(state, jpeg_bytes) -> list:
                     state["last_saved_slide"], candidate, state["slide_mask"]
                 )
                 is_dup = dd < SLIDE_DEDUP_FRACTION
+                if is_dup:
+                    log.info(f"Slide skipped on section exit - dup (dd={dd:.3f})")
             if not is_dup:
                 state["slide_index"] += 1
                 state["last_saved_slide"] = candidate
-                msgs.append(json.dumps({
-                    "type": "slide_change",
-                    "slide_index": state["slide_index"],
-                    "thumbnail": _encode_thumbnail(candidate),
-                }))
+                msgs.append(_emit_slide(candidate, state["slide_index"]))
+        else:
+            log.info(f"Slide skipped on section exit - too short ({dur:.1f}s)")
         state["slide_candidate"] = None
         state["slide_prev"] = None
         state["slide_mask"] = None
@@ -425,11 +461,7 @@ def process_frame_sync(state, jpeg_bytes) -> list:
         state["slide_start"] = pending_start
         state["slide_prev"] = frame
         state["slide_mask"] = build_face_mask(frame.shape, faces) if faces else None
-        msgs.append(json.dumps({
-            "type": "slide_change",
-            "slide_index": state["slide_index"],
-            "thumbnail": _encode_thumbnail(frame),
-        }))
+        msgs.append(_emit_slide(frame, state["slide_index"]))
     elif pending_type == "face":
         face = largest_face(faces)
         if face is not None:
@@ -470,6 +502,10 @@ def save_session(state):
     out_dir = Path("output") / f"live_{ts}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    for idx, jpeg in state["slides"]:
+        path = out_dir / f"slide_{idx:03d}.jpg"
+        path.write_bytes(jpeg)
+
     with open(out_dir / "transcript_segments.json", "w") as f:
         json.dump(state["transcript_segments"], f, indent=2)
 
@@ -485,14 +521,22 @@ def save_session(state):
     with open(out_dir / "transcript.md", "w") as f:
         f.write("\n".join(md))
 
-    log.info(f"Session saved → {out_dir}")
+    log.info(f"Session saved → {out_dir} ({len(state['slides'])} slides, {len(state['transcript_segments'])} segments)")
 
 
 # ===================================================================
 # FastAPI app
 # ===================================================================
 
-app = FastAPI(title="ClapScript Live")
+@asynccontextmanager
+async def lifespan(app):
+    await asyncio.to_thread(get_face_detector)
+    if int(os.environ.get("LISTEN_FDS", "0")) >= 1:
+        asyncio.create_task(_idle_exit_watcher())
+    yield
+
+
+app = FastAPI(title="ClapScript Live", lifespan=lifespan)
 
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -505,7 +549,9 @@ async def index():
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
+    global _active_connections, _last_disconnect
     await ws.accept()
+    _active_connections += 1
     log.info("Client connected")
 
     # Config handshake: client sends {"lang": "en"} first
@@ -589,6 +635,8 @@ async def websocket_endpoint(ws: WebSocket):
     except Exception as e:
         log.exception(f"WebSocket error: {e}")
     finally:
+        _active_connections -= 1
+        _last_disconnect = time.time()
         save_session(state)
 
 
@@ -598,5 +646,8 @@ async def websocket_endpoint(ws: WebSocket):
 
 if __name__ == "__main__":
     import uvicorn
-    get_face_detector()  # Warm up face detector before first request
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    if int(os.environ.get("LISTEN_FDS", "0")) >= 1:
+        # Launched by systemd socket activation - fd 3 is the pre-bound socket
+        uvicorn.run(app, fd=3, log_level="info")
+    else:
+        uvicorn.run(app, host="0.0.0.0", port=8013, log_level="info")
